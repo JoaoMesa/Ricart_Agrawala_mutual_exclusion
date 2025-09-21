@@ -87,3 +87,27 @@ getting permission from everyone is overkill. All that is needed is a method to
 prevent two processes from accessing the resource at the same time. The algo-
 rithm can be modified to grant permission when it has collected permission
 from a simple majority of the other processes, rather than from all of them.
+
+
+Partes importantes:
+
+When a process wants to access a shared
+resource, it builds a message containing the name of the resource, its process
+number, and the current (logical) time.
+It then sends the message to all other
+processes, conceptually including itself.
+
+When a process receives a request message from another process, the
+action it takes depends on its own state regarding the resource named in the
+message. Three different cases have to be clearly distinguished:
+• If the receiver is not accessing the resource and does not want to access
+it, it sends back an OK message to the sender.
+• If the receiver already has access to the resource, it simply does not reply.
+Instead, it queues the request.
+• If the receiver wants to access the resource as well but has not yet done
+so, it compares the timestamp of the incoming message with the one
+contained in the message that it has sent everyone. The lowest one wins.
+If the incoming message has a lower timestamp, the receiver sends back
+an OK message. If its own message has a lower timestamp, the receiver
+queues the incoming request and sends nothing.
+

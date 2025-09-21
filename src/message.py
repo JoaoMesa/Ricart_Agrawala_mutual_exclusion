@@ -3,20 +3,35 @@ from enum import Enum
 from typing import Optional
 
 class MessageType(Enum):
-    MULTICAST = "multicast"
-    ACK = "ack"
+    REQUEST = "request"  # Request to access resource
+    REPLY = "reply"      # Reply to a request (permission granted)
 
 class Message:
-    """Message class for totally ordered multicast."""
+    """Message class for Ricart-Agrawala mutual exclusion algorithm."""
     
-    def __init__(self, msg_type: MessageType, sender: str, timestamp: int, 
-                 content: Optional[str] = None, original_msg_id: Optional[str] = None):
-        self.msg_id = f"{sender}_{timestamp}"
+    def __init__(self, msg_type: MessageType, sender: str, logical_time: int,
+                 resource_name: Optional[str] = None, request_id: Optional[str] = None):
+        """
+        Initialize a message for Ricart-Agrawala algorithm.
+        
+        Args:
+            msg_type: Type of message (REQUEST or REPLY)
+            sender: Process identifier/number
+            logical_time: Current logical time when message was created
+            resource_name: Name of the resource being requested (for REQUEST messages)
+            request_id: ID of the original request (for REPLY messages)
+        """
+        self.msg_id = f"{sender}_{logical_time}_{msg_type.value}"
         self.msg_type = msg_type
-        self.sender = sender
-        self.timestamp = timestamp
-        self.content = content
-        self.original_msg_id = original_msg_id  # For ACK messages
+        self.sender = sender  # This serves as the process number
+        self.logical_time = logical_time
+        self.resource_name = resource_name
+        self.request_id = request_id  # For REPLY messages, references the original REQUEST
+        
+    @property
+    def process_number(self):
+        """Get the process number (same as sender)."""
+        return self.sender
     
     def to_dict(self):
         """Convert message to dictionary for JSON serialization."""
@@ -24,9 +39,9 @@ class Message:
             'msg_id': self.msg_id,
             'msg_type': self.msg_type.value,
             'sender': self.sender,
-            'timestamp': self.timestamp,
-            'content': self.content,
-            'original_msg_id': self.original_msg_id
+            'logical_time': self.logical_time,
+            'resource_name': self.resource_name,
+            'request_id': self.request_id
         }
     
     @classmethod
@@ -35,13 +50,36 @@ class Message:
         message = cls(
             msg_type=MessageType(data['msg_type']),
             sender=data['sender'],
-            timestamp=data['timestamp'],
-            content=data.get('content'),
-            original_msg_id=data.get('original_msg_id')
+            logical_time=data['logical_time'],
+            resource_name=data.get('resource_name'),
+            request_id=data.get('request_id')
         )
-        # Mantém o msg_id original do dicionário
+        # Maintain the original msg_id from dictionary
         message.msg_id = data['msg_id']
         return message
     
+    @classmethod
+    def create_request(cls, sender: str, logical_time: int, resource_name: str):
+        """Factory method to create a REQUEST message."""
+        return cls(
+            msg_type=MessageType.REQUEST,
+            sender=sender,
+            logical_time=logical_time,
+            resource_name=resource_name
+        )
+    
+    @classmethod
+    def create_reply(cls, sender: str, logical_time: int, request_id: str):
+        """Factory method to create a REPLY message."""
+        return cls(
+            msg_type=MessageType.REPLY,
+            sender=sender,
+            logical_time=logical_time,
+            request_id=request_id
+        )
+    
     def __repr__(self):
-        return f"Message(id={self.msg_id}, type={self.msg_type.value}, sender={self.sender}, ts={self.timestamp}, content='{self.content}')"
+        if self.msg_type == MessageType.REQUEST:
+            return f"Message(id={self.msg_id}, type={self.msg_type.value}, sender={self.sender}, time={self.logical_time}, resource='{self.resource_name}')"
+        else:
+            return f"Message(id={self.msg_id}, type={self.msg_type.value}, sender={self.sender}, time={self.logical_time}, request_id='{self.request_id}')"
