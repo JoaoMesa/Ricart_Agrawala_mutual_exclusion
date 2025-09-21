@@ -1,0 +1,89 @@
+Implemente uma versão minimalista do algoritmo distribuído de Ricart e
+Agrawala para exclusão mútua. Siga a especificação do algoritmo conforme
+livro do Tanenbaum. Implemente o algoritmo de forma que cada requisição
+seja SEMPRE respondida, independente se irá conceder ou não o acesso ao
+recurso. Veja esta discussão no livro. Considere que não há falhas no
+sistema, nem de processo nem de canal. Faça o cenário funcionar para 3
+processos e crie diferentes situações para testar e provar o funcionamento
+do algoritmo.
+
+Em dupla.
+A escolha da linguagem de programação a ser utilizada fica a critério da
+dupla.
+Apresentação no laboratório no dia 23/09/2025 a partir das 14:00 hrs.
+Nota individual.
+Entrega via Google Classroom até 23/09/2025 às 14:00.   
+
+
+
+
+
+5.3.3 A distributed algorithm
+Using Lamport’s logical clocks, and inspired by Lamport’s original solution
+for distributed mutual exclusion (which we discussed in Note 5.3), Ricart and
+Agrawala [1981] provided the following algorithm. Their solution requires a
+total ordering of all events in the system. That is, for any pair of events, such
+as messages, it must be unambiguous which one actually happened first.
+The algorithm works as follows. When a process wants to access a shared
+resource, it builds a message containing the name of the resource, its process
+number, and the current (logical) time. It then sends the message to all other
+processes, conceptually including itself. The sending of messages is assumed
+to be reliable; that is, no message is lost.
+When a process receives a request message from another process, the
+action it takes depends on its own state regarding the resource named in the
+message. Three different cases have to be clearly distinguished:
+• If the receiver is not accessing the resource and does not want to access
+it, it sends back an OK message to the sender.
+• If the receiver already has access to the resource, it simply does not reply.
+Instead, it queues the request.
+• If the receiver wants to access the resource as well but has not yet done
+so, it compares the timestamp of the incoming message with the one
+contained in the message that it has sent everyone. The lowest one wins.
+If the incoming message has a lower timestamp, the receiver sends back
+an OK message. If its own message has a lower timestamp, the receiver
+queues the incoming request and sends nothing.
+After sending out requests asking permission, a process sits back and waits
+until everyone else has given permission. As soon as all the permissions are
+in, it may go ahead. When it is finished, it sends OK messages to all processes
+in its queue and deletes them all from the queue. If there is no conflict, it
+clearly works. However, suppose that two processes try to access the resource
+simultaneously, as shown in Figure 5.15(a).
+Process P0 sends everyone a request with timestamp 8, while at the same
+time, process P2 sends everyone a request with timestamp 12. P1 is not
+interested in the resource, so it sends OK to both senders. Processes P0 and
+P2 both see the conflict and compare timestamps. P2 sees that it has lost,
+so it grants permission to P0 by sending OK. Process P0 now queues the
+request from P2 for later processing and accesses the resource, as shown
+in Figure 5.15(b). When it is finished, it removes the request from P2 from
+its queue and sends an OK message to P2, allowing the latter to go ahead,
+as shown in Figure 5.15(c). The algorithm works because in the case of a
+conflict, the lowest timestamp wins and everyone agrees on the ordering of
+the timestamps.
+With this algorithm, mutual exclusion is guaranteed without deadlock or
+starvation. If the total number of processes is N, then the number of messages
+that a process needs to send and receive before it can enter its critical region
+is 2 · (N − 1): N − 1 request messages to all other processes, and subsequently
+N − 1 OK messages, one from each other process. A critical region is a series
+of instructions to be executed by a process, which requires mutually exclusive
+access.
+Unfortunately, this algorithm has N points of failure. If any process
+crashes, it will fail to respond to requests. This silence will be interpreted
+(incorrectly) as denial of permission, thus blocking all subsequent attempts by
+all processes to enter any of their respective critical regions. The algorithm can
+be patched up as follows. When a request comes in, the receiver always sends
+a reply, either granting or denying permission. Whenever either a request or a
+reply is lost, the sender times out and keeps trying until either a reply comes
+back or the sender concludes that the destination is dead. After a request is
+denied, the sender should block, waiting for a subsequent OK message.
+Another problem with this algorithm is that either a multicast commu-
+nication primitive must be used, or each process must maintain the group
+membership list itself, including processes entering the group, leaving the
+group, and crashing. The method works best with small groups of processes
+that never change their group memberships. Finally, note that all processes are
+involved in all decisions concerning accessing the shared resource, which may
+impose a burden on processes running on resource-constrained machines.
+Various minor improvements are possible to this algorithm. For example,
+getting permission from everyone is overkill. All that is needed is a method to
+prevent two processes from accessing the resource at the same time. The algo-
+rithm can be modified to grant permission when it has collected permission
+from a simple majority of the other processes, rather than from all of them.
