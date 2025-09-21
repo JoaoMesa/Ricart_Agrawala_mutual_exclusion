@@ -1,12 +1,4 @@
-###############
-#   Atividade de Sistemas Distribuídos
-#   Exclusão Mútua: Ricart & Agrawala
-#   João Vitor Naves Mesa - 814149
-#   Vinicius Fernandes Terra Silva - 814146
-#
-################
-
-# main.py
+# === main.py ===
 import socket
 import sys
 from process import Process
@@ -14,6 +6,9 @@ from process import Process
 HOST = "localhost"
 PORTS = [5000, 5001, 5002]
 PROC_NAMES = {5000: "processo1", 5001: "processo2", 5002: "processo3"}
+RESOURCES  = [i for i in range(1, 6)]
+print("Recursos disponíveis:", RESOURCES)
+
 
 def pick_free_port(candidates):
     for p in candidates:
@@ -26,6 +21,7 @@ def pick_free_port(candidates):
             s.close()
             continue
     return None
+
 
 def main():
     chosen = pick_free_port(PORTS)
@@ -51,35 +47,48 @@ def main():
     try:
         print(f"Iniciando processo {proc_id}, porta {chosen} com incremento de clock {clock_increment}.")
         print("\nComandos:")
-        print("  send <message>  - Envia a mensagem")
-        print("  queue          - Mostra a fila de mensagens atual")
-        print("  deliver        - Tenta entregar a mensagem que está no iníci da fila")
-        print("  clock          - Mostra o clock atual")
-        print("  pass           - Incrementa o relógio em um ciclo")
-        print("  quit           - Para o processo")
+        print("  request <resource>  - Faz uma requisição pelo recurso")
+        print("  release <resource>  - Libera o recurso (sai da seção crítica)")
+        print("  status              - Mostra estado dos recursos locais")
+        print("  queue               - Mostra a fila de pedidos recebidos")
+        print("  clock               - Mostra o clock atual")
+        print("  pass                - Incrementa o relógio em um ciclo")
+        print("  quit                - Para o processo")
         
         while True:
             try:
                 user_input = input(f"[{proc_id}]> ").strip()
                 if not user_input:
                     continue
-                    
-                if user_input.lower() == "quit":
+                
+                cmd_parts = user_input.split()
+                cmd = cmd_parts[0].lower()
+
+                if cmd == "quit":
                     break
-                elif user_input.lower() == "deliver":
-                    proc.try_deliver_message()
-                elif user_input.lower() == "queue":
+                elif cmd == "status":
+                    # Simple status print (process.py provides get_resource_state stub)
+                    for r in RESOURCES:
+                        st = proc.get_resource_state(r)
+                        print(f"Recurso {r}: {st}")
+                elif cmd == "queue":
                     proc.show_queue()
-                elif user_input.lower() == "clock":
+                elif cmd == "clock":
                     print(f"Clock atual: {proc.get_clock()}")
-                elif user_input.lower() == "pass":
+                elif cmd == "pass":
                     proc.increment_clock()
-                elif user_input.startswith("send "):
-                    message_content = user_input[5:].strip()
-                    if message_content:
-                        proc.send_message(message_content)
-                    else:
-                        print("Falta o conteúdo da mensagem.")
+                elif cmd == "request":
+                    if len(cmd_parts) < 2:
+                        print("Uso: request <resource>")
+                        continue
+                    resource = cmd_parts[1]
+                    proc.request_resource(resource)
+                elif cmd == "release":
+                    if len(cmd_parts) < 2:
+                        print("Uso: release <resource>")
+                        continue
+                    resource = cmd_parts[1]
+                    proc.exit_critical_section(resource)
                 else:
                     print("Comando inválido.")
                     
@@ -88,7 +97,9 @@ def main():
                 
     finally:
         proc.stop()
-        print("Processo interropido.")
+        print("Processo interrompido.")
 
 if __name__ == "__main__":
     main()
+
+
