@@ -7,6 +7,12 @@ from message import Message, MessageType
 
 HOST = "localhost"
 
+class ResourceState:
+    """Estados possíveis para um recurso"""
+    RELEASED = "released"      # Não está usando e não quer usar
+    WANTED = "wanted"         # Quer usar mas ainda não conseguiu
+    HELD = "held"            # Está usando atualmente
+
 class Process:
     """Processo com relógio lógico e capacidades de multicast totalmente ordenado."""
     
@@ -52,35 +58,230 @@ class Process:
         self.current_lock = threading.Lock()
     
     def request_resource(self, resource_name: str):
-        pass 
+        """
+        Solicita acesso a um recurso usando o algoritmo Ricart-Agrawala.
+        Versão inicial: sempre recebe permissão.
+        """
+        print(f"\n[{self.proc_id}] === SOLICITANDO RECURSO '{resource_name}' ===")
+        
+        # Verifica se já está usando o recurso
+        current_state = self.get_resource_state(resource_name)
+        if current_state == ResourceState.HELD:
+            print(f"[{self.proc_id}] Erro: já possui o recurso '{resource_name}'")
+            return
+        
+        if current_state == ResourceState.WANTED:
+            print(f"[{self.proc_id}] Erro: já está aguardando o recurso '{resource_name}'")
+            return
+        
+        # Incrementa o relógio e marca como WANTED
+        timestamp = self.increment_clock()
+        
+        with self.resource_lock:
+            self.resource_states[resource_name] = ResourceState.WANTED
+        
+        # Cria mensagem de REQUEST
+        request_msg = Message.create_request(
+            sender=self.proc_id,
+            logical_time=timestamp,
+            resource_name=resource_name
+        )
+        
+        # Armazena nossa requisição atual
+        with self.current_lock:
+            self.current_request[resource_name] = request_msg
+        
+        # Inicializa contador de respostas
+        with self.request_lock:
+            self.pending_requests[resource_name] = {
+                "request_msg": request_msg,
+                "replies_received": set()
+            }
+        
+        print(f"[{self.proc_id}] Enviando REQUEST para todos os processos (ts: {timestamp})")
+        
+        # Envia REQUEST para todos os outros processos
+        self._multicast_message(request_msg)
+        
+        print(f"[{self.proc_id}] Aguardando respostas de {len(self.all_processes) - 1} processos...")
 
     def process_request(self, message: Message):
-        pass
+        """
+        Processa uma mensagem REQUEST recebida.
+        Versão inicial: sempre responde com OK imediatamente.
+        """
+        print(f"[{self.proc_id}] Processando REQUEST de {message.sender} para '{message.resource_name}'")
+        
+        # Versão inicial: sempre envia REPLY (OK) imediatamente
+        print(f"[{self.proc_id}] → Enviando REPLY (OK) para {message.sender}")
+        self.send_reply(message.sender, message.msg_id)
 
     def process_reply(self, message: Message):
-        pass
+        """
+        Processa uma mensagem REPLY (OK) recebida.
+        """
+        print(f"[{self.proc_id}] Processando REPLY de {message.sender}")
+        
+        # Encontra qual recurso está sendo respondido
+        with self.request_lock:
+            resource_found = None
+            for resource_name, pending in self.pending_requests.items():
+                if pending["request_msg"].msg_id == message.request_id:
+                    resource_found = resource_name
+                    break
+            
+            if resource_found is None:
+                print(f"[{self.proc_id}] Warning: REPLY recebido para requisição desconhecida: {message.request_id}")
+                return
+            
+            # Adiciona o remetente ao conjunto de respostas recebidas
+            self.pending_requests[resource_found]["replies_received"].add(message.sender)
+            replies_count = len(self.pending_requests[resource_found]["replies_received"])
+            needed_replies = len(self.all_processes) - 1  # Exceto nós mesmos
+            
+            print(f"[{self.proc_id}] REPLY {replies_count}/{needed_replies} recebido para '{resource_found}'")
+            
+            # Verifica se recebemos todas as respostas necessárias
+            if replies_count >= needed_replies:
+                print(f"[{self.proc_id}] ✓ Todas as respostas recebidas para '{resource_found}'!")
+                
+                # Remove da lista de requisições pendentes
+                del self.pending_requests[resource_found]
+                
+                # Entra na seção crítica
+                self.enter_critical_section(resource_found)
 
     def send_reply(self, to_process: str, request_id: str):
-        pass
+        """
+        Envia uma mensagem REPLY (OK) para um processo.
+        """
+        timestamp = self.increment_clock()
+        
+        reply_msg = Message.create_reply(
+            sender=self.proc_id,
+            logical_time=timestamp,
+            request_id=request_id
+        )
+        
+        # Encontra a porta do processo de destino
+        process_to_port = {"processo1": 5000, "processo2": 5001, "processo3": 5002}
+        target_port = process_to_port.get(to_process)
+        
+        if target_port is None:
+            print(f"[{self.proc_id}] Erro: processo desconhecido '{to_process}'")
+            return
+        
+        self._send_message_to_port(reply_msg, target_port)
 
     def enter_critical_section(self, resource_name: str):
-        pass
+        """
+        Entra na seção crítica (obtém acesso exclusivo ao recurso).
+        """
+        print(f"\n[{self.proc_id}] 🔒 ENTRANDO NA SEÇÃO CRÍTICA - Recurso '{resource_name}'")
+        
+        with self.resource_lock:
+            self.resource_states[resource_name] = ResourceState.HELD
+        
+        with self.current_lock:
+            if resource_name in self.current_request:
+                del self.current_request[resource_name]
+        
+        print(f"[{self.proc_id}] ✓ Acesso exclusivo ao recurso '{resource_name}' obtido!")
+        print(f"[{self.proc_id}] Use 'release {resource_name}' para sair da seção crítica")
 
     def exit_critical_section(self, resource_name: str):
-        pass
+        """
+        Sai da seção crítica (libera o recurso).
+        """
+        current_state = self.get_resource_state(resource_name)
+        
+        if current_state != ResourceState.HELD:
+            print(f"[{self.proc_id}] Erro: não possui o recurso '{resource_name}' atualmente")
+            return
+        
+        print(f"\n[{self.proc_id}] 🔓 SAINDO DA SEÇÃO CRÍTICA - Recurso '{resource_name}'")
+        
+        with self.resource_lock:
+            self.resource_states[resource_name] = ResourceState.RELEASED
+        
+        # Processa requisições enfileiradas (por enquanto, lista vazia)
+        self.process_queued_requests()
+        
+        print(f"[{self.proc_id}] ✓ Recurso '{resource_name}' liberado!")
 
     def compare_requests(self, req1: Message, req2: Message):
-        pass
+        """
+        Compara duas requisições para determinar prioridade.
+        Retorna True se req1 tem prioridade sobre req2.
+        """
+        # Prioridade por timestamp (menor = maior prioridade)
+        if req1.logical_time != req2.logical_time:
+            return req1.logical_time < req2.logical_time
+        
+        # Em caso de empate, usa ID do processo (ordem lexicográfica)
+        return req1.sender < req2.sender
 
     def queue_request(self, message: Message):
-        pass
+        """
+        Enfileira uma requisição para processar mais tarde.
+        """
+        with self.queue_lock:
+            self.request_queue.append(message)
+            print(f"[{self.proc_id}] Requisição de {message.sender} enfileirada")
 
     def process_queued_requests(self):
-        pass
+        """
+        Processa requisições enfileiradas após liberar um recurso.
+        Por enquanto, não há requisições enfileiradas (sempre respondemos OK).
+        """
+        with self.queue_lock:
+            if self.request_queue:
+                print(f"[{self.proc_id}] Processando {len(self.request_queue)} requisições enfileiradas")
+                # Por enquanto, não fazemos nada pois sempre respondemos OK imediatamente
+            else:
+                print(f"[{self.proc_id}] Nenhuma requisição enfileirada para processar")
 
-    def get_resource_state(self, resource_name: str):
-        pass
+    def get_resource_state(self, resource_name):
+        """
+        Retorna o estado atual de um recurso.
+        """
+        # Garantir que resource_name seja sempre string
+        resource_name = str(resource_name)
+        
+        with self.resource_lock:
+            return self.resource_states.get(resource_name, ResourceState.RELEASED)
 
+    def show_queue(self):
+        """
+        Mostra o conteúdo da fila de requisições.
+        """
+        with self.queue_lock:
+            if not self.request_queue:
+                print(f"[{self.proc_id}] Fila de requisições vazia")
+            else:
+                print(f"[{self.proc_id}] Fila de requisições ({len(self.request_queue)} itens):")
+                for i, req in enumerate(self.request_queue):
+                    print(f"  {i+1}. {req.sender} -> '{req.resource_name}' (ts: {req.logical_time})")
+
+    def _multicast_message(self, message: Message):
+        """
+        Envia mensagem para todos os outros processos.
+        """
+        for port in self.other_ports:
+            self._send_message_to_port(message, port)
+
+    def _send_message_to_port(self, message: Message, port: int):
+        """
+        Envia mensagem para um processo específico.
+        """
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5.0)
+                s.connect((HOST, port))
+                s.send(json.dumps(message.to_dict()).encode())
+                print(f"[{self.proc_id}] → Enviado {message.msg_type.value.upper()} para porta {port}")
+        except Exception as e:
+            print(f"[{self.proc_id}] Erro enviando mensagem para porta {port}: {e}")
 
     def start(self):
         """Iniciar o servidor do processo."""
