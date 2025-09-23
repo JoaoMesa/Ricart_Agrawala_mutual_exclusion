@@ -34,37 +34,30 @@ class Process:
         self.all_ports = sorted([port] + other_ports) 
         port_to_process = {5000: "processo1", 5001: "processo2", 5002: "processo3"}
         self.all_processes = set([port_to_process[p] for p in self.all_ports])
-        self.total_processes = len(self.all_processes)  # Need replies from all processes
+        self.total_processes = len(self.all_processes)
         
         print(f"[{self.proc_id}] All processes in group: {sorted(list(self.all_processes))}")
         print(f"[{self.proc_id}] Total processes: {self.total_processes}")
         
-        # === RICART-AGRAWALA SPECIFIC DATA STRUCTURES ===
-        
-        # Resource states: tracks state for each resource
-        self.resource_states = {}  # {resource_name: ResourceState}
+        self.resource_states = {}
         self.resource_lock = threading.Lock()
         
-        # Current requests: tracks our own requests waiting for replies
-        self.pending_requests = {}  # {resource_name: {"request_msg": Message, "replies_received": set}}
+        self.pending_requests = {}  
         self.request_lock = threading.Lock()
         
-        # Request queue: stores requests from other processes that we can't reply to yet
-        self.request_queue = []  # List of Message objects
+        
+        self.request_queue = [] 
         self.queue_lock = threading.Lock()
         
-        # Current request being processed (for timestamp comparison)
-        self.current_request = {}  # {resource_name: Message}
-        self.current_lock = threading.Lock()
+        self.my_request_timestamps = {} 
+        self.timestamp_lock = threading.Lock()
     
     def request_resource(self, resource_name: str):
         """
-        Solicita acesso a um recurso usando o algoritmo Ricart-Agrawala.
-        Versão inicial: sempre recebe permissão.
+        Solicita acesso a um recurso
         """
         print(f"\n[{self.proc_id}] === SOLICITANDO RECURSO '{resource_name}' ===")
         
-        # Verifica se já está usando o recurso
         current_state = self.get_resource_state(resource_name)
         if current_state == ResourceState.HELD:
             print(f"[{self.proc_id}] Erro: já possui o recurso '{resource_name}'")
@@ -79,6 +72,10 @@ class Process:
         
         with self.resource_lock:
             self.resource_states[resource_name] = ResourceState.WANTED
+            
+        # Armazena o timestamp da nossa requisição para comparação
+        with self.timestamp_lock:
+            self.my_request_timestamps[resource_name] = timestamp
         
         # Cria mensagem de REQUEST
         request_msg = Message.create_request(
@@ -87,11 +84,7 @@ class Process:
             resource_name=resource_name
         )
         
-        # Armazena nossa requisição atual
-        with self.current_lock:
-            self.current_request[resource_name] = request_msg
-        
-        # Inicializa contador de respostas
+        # Inicializa contador de respostas (apenas grants serão contados)
         with self.request_lock:
             self.pending_requests[resource_name] = {
                 "request_msg": request_msg,
@@ -100,27 +93,57 @@ class Process:
         
         print(f"[{self.proc_id}] Enviando REQUEST para todos os processos (ts: {timestamp})")
         
-        # Envia REQUEST para todos os outros processos
         self._multicast_message(request_msg)
         
-        print(f"[{self.proc_id}] Aguardando respostas de {len(self.all_processes) - 1} processos...")
+        needed_replies = len(self.all_processes) - 1 
+        print(f"[{self.proc_id}] Aguardando respostas (grants) de {needed_replies} processos...")
 
     def process_request(self, message: Message):
         """
-        Processa uma mensagem REQUEST recebida.
-        Versão inicial: sempre responde com OK imediatamente.
+        Processa uma mensagem REQUEST recebida seguindo as 3 regras do algoritmo Ricart-Agrawala:
+        1. Se não estou interessado no recurso → enviar OK (granted=True)
+        2. Se já tenho o recurso → enfileirar requisição e enviar REPLY deferred (granted=False)
+        3. Se quero o recurso → comparar timestamps e decidir (responder OK ou DEFER)
         """
-        print(f"[{self.proc_id}] Processando REQUEST de {message.sender} para '{message.resource_name}'")
+        resource_name = message.resource_name
+        print(f"[{self.proc_id}] Processando REQUEST de {message.sender} para '{resource_name}' (ts: {message.logical_time})")
         
-        # Versão inicial: sempre envia REPLY (OK) imediatamente
-        print(f"[{self.proc_id}] → Enviando REPLY (OK) para {message.sender}")
-        self.send_reply(message.sender, message.msg_id)
+        current_state = self.get_resource_state(resource_name)
+        
+        if current_state == ResourceState.RELEASED:
+            print(f"[{self.proc_id}] → CASO 1: Não tenho interesse no recurso '{resource_name}' - enviando GRANT (OK)")
+            self.send_reply(message.sender, message.msg_id, granted=True)
+            return
+        
+        if current_state == ResourceState.HELD:
+            print(f"[{self.proc_id}] → CASO 2: Tenho o recurso '{resource_name}' - enfileirando requisição e enviando DEFER")
+            self.queue_request(message)
+            self.send_reply(message.sender, message.msg_id, granted=False)
+            return
+        
+        if current_state == ResourceState.WANTED:
+            with self.timestamp_lock:
+                my_timestamp = self.my_request_timestamps.get(resource_name, float('inf'))
+            
+            print(f"[{self.proc_id}] → CASO 3: Ambos querem '{resource_name}' - comparando timestamps")
+            print(f"[{self.proc_id}]   Meu timestamp: {my_timestamp}, Timestamp recebido: {message.logical_time}")
+            
+            if (message.logical_time < my_timestamp) or \
+               (message.logical_time == my_timestamp and message.sender < self.proc_id):
+                print(f"[{self.proc_id}]   → {message.sender} tem prioridade - enviando GRANT (OK)")
+                self.send_reply(message.sender, message.msg_id, granted=True)
+            else:
+                print(f"[{self.proc_id}]   → Eu tenho prioridade - enfileirando requisição e enviando DEFER")
+                self.queue_request(message)
+                self.send_reply(message.sender, message.msg_id, granted=False)
+            return
 
     def process_reply(self, message: Message):
         """
-        Processa uma mensagem REPLY (OK) recebida.
+        Processa uma mensagem REPLY recebida.
+        Conta apenas replies com granted == True (GRANT/OK).
         """
-        print(f"[{self.proc_id}] Processando REPLY de {message.sender}")
+        print(f"[{self.proc_id}] Processando REPLY de {message.sender} (granted={message.granted})")
         
         # Encontra qual recurso está sendo respondido
         with self.request_lock:
@@ -134,33 +157,34 @@ class Process:
                 print(f"[{self.proc_id}] Warning: REPLY recebido para requisição desconhecida: {message.request_id}")
                 return
             
-            # Adiciona o remetente ao conjunto de respostas recebidas
+            if not message.granted:
+                print(f"[{self.proc_id}] Reply de {message.sender} é DEFERRED (não conta como permissão).")
+                return
+            
             self.pending_requests[resource_found]["replies_received"].add(message.sender)
             replies_count = len(self.pending_requests[resource_found]["replies_received"])
             needed_replies = len(self.all_processes) - 1  # Exceto nós mesmos
             
-            print(f"[{self.proc_id}] REPLY {replies_count}/{needed_replies} recebido para '{resource_found}'")
+            print(f"[{self.proc_id}] GRANTs recebidos {replies_count}/{needed_replies} para '{resource_found}'")
             
-            # Verifica se recebemos todas as respostas necessárias
             if replies_count >= needed_replies:
-                print(f"[{self.proc_id}] ✓ Todas as respostas recebidas para '{resource_found}'!")
+                print(f"[{self.proc_id}] ✓ Todas as permissões (GRANTs) recebidas para '{resource_found}'!")
                 
-                # Remove da lista de requisições pendentes
                 del self.pending_requests[resource_found]
                 
-                # Entra na seção crítica
                 self.enter_critical_section(resource_found)
 
-    def send_reply(self, to_process: str, request_id: str):
+    def send_reply(self, to_process: str, request_id: str, granted: bool = True):
         """
-        Envia uma mensagem REPLY (OK) para um processo.
+        Envia uma mensagem REPLY para um processo, indicando se é GRANT (True) ou DEFER (False).
         """
         timestamp = self.increment_clock()
         
         reply_msg = Message.create_reply(
             sender=self.proc_id,
             logical_time=timestamp,
-            request_id=request_id
+            request_id=request_id,
+            granted=granted
         )
         
         # Encontra a porta do processo de destino
@@ -171,20 +195,22 @@ class Process:
             print(f"[{self.proc_id}] Erro: processo desconhecido '{to_process}'")
             return
         
+        action = "GRANT" if granted else "DEFER"
+        print(f"[{self.proc_id}] → Enviando REPLY ({action}) para {to_process} (req_id={request_id})")
         self._send_message_to_port(reply_msg, target_port)
 
     def enter_critical_section(self, resource_name: str):
         """
         Entra na seção crítica (obtém acesso exclusivo ao recurso).
         """
-        print(f"\n[{self.proc_id}] 🔒 ENTRANDO NA SEÇÃO CRÍTICA - Recurso '{resource_name}'")
+        print(f"\n[{self.proc_id}] ENTRANDO NA SEÇÃO CRÍTICA - Recurso '{resource_name}'")
         
         with self.resource_lock:
             self.resource_states[resource_name] = ResourceState.HELD
-        
-        with self.current_lock:
-            if resource_name in self.current_request:
-                del self.current_request[resource_name]
+            
+        with self.timestamp_lock:
+            if resource_name in self.my_request_timestamps:
+                del self.my_request_timestamps[resource_name]
         
         print(f"[{self.proc_id}] ✓ Acesso exclusivo ao recurso '{resource_name}' obtido!")
         print(f"[{self.proc_id}] Use 'release {resource_name}' para sair da seção crítica")
@@ -204,22 +230,9 @@ class Process:
         with self.resource_lock:
             self.resource_states[resource_name] = ResourceState.RELEASED
         
-        # Processa requisições enfileiradas (por enquanto, lista vazia)
-        self.process_queued_requests()
+        self.process_queued_requests(resource_name)
         
         print(f"[{self.proc_id}] ✓ Recurso '{resource_name}' liberado!")
-
-    def compare_requests(self, req1: Message, req2: Message):
-        """
-        Compara duas requisições para determinar prioridade.
-        Retorna True se req1 tem prioridade sobre req2.
-        """
-        # Prioridade por timestamp (menor = maior prioridade)
-        if req1.logical_time != req2.logical_time:
-            return req1.logical_time < req2.logical_time
-        
-        # Em caso de empate, usa ID do processo (ordem lexicográfica)
-        return req1.sender < req2.sender
 
     def queue_request(self, message: Message):
         """
@@ -227,25 +240,41 @@ class Process:
         """
         with self.queue_lock:
             self.request_queue.append(message)
-            print(f"[{self.proc_id}] Requisição de {message.sender} enfileirada")
+            print(f"[{self.proc_id}] Requisição de {message.sender} para '{message.resource_name}' enfileirada")
 
-    def process_queued_requests(self):
+    def process_queued_requests(self, released_resource: str):
         """
         Processa requisições enfileiradas após liberar um recurso.
-        Por enquanto, não há requisições enfileiradas (sempre respondemos OK).
         """
         with self.queue_lock:
-            if self.request_queue:
-                print(f"[{self.proc_id}] Processando {len(self.request_queue)} requisições enfileiradas")
-                # Por enquanto, não fazemos nada pois sempre respondemos OK imediatamente
-            else:
+            if not self.request_queue:
                 print(f"[{self.proc_id}] Nenhuma requisição enfileirada para processar")
+                return
+                
+            requests_to_process = []
+            remaining_queue = []
+            
+            for req in self.request_queue:
+                if req.resource_name == released_resource:
+                    requests_to_process.append(req)
+                else:
+                    remaining_queue.append(req)
+            
+            self.request_queue = remaining_queue
+            
+            if requests_to_process:
+                print(f"[{self.proc_id}] Processando {len(requests_to_process)} requisições enfileiradas para '{released_resource}'")
+                
+                for req in requests_to_process:
+                    print(f"[{self.proc_id}] → Enviando GRANT (OK) para {req.sender} (requisição enfileirada)")
+                    self.send_reply(req.sender, req.msg_id, granted=True)
+            else:
+                print(f"[{self.proc_id}] Nenhuma requisição enfileirada para o recurso '{released_resource}'")
 
     def get_resource_state(self, resource_name):
         """
         Retorna o estado atual de um recurso.
         """
-        # Garantir que resource_name seja sempre string
         resource_name = str(resource_name)
         
         with self.resource_lock:
@@ -262,6 +291,39 @@ class Process:
                 print(f"[{self.proc_id}] Fila de requisições ({len(self.request_queue)} itens):")
                 for i, req in enumerate(self.request_queue):
                     print(f"  {i+1}. {req.sender} -> '{req.resource_name}' (ts: {req.logical_time})")
+    
+    def show_status(self):
+        """
+        Mostra o status detalhado do processo.
+        """
+        print(f"\n[{self.proc_id}] === STATUS DO PROCESSO ===")
+        print(f"Clock atual: {self.get_clock()}")
+        
+        print("Estados dos recursos:")
+        resources = [str(i) for i in range(1, 4)]  
+        for resource in resources:
+            state = self.get_resource_state(resource)
+            print(f"  Recurso {resource}: {state}")
+        
+        with self.request_lock:
+            if self.pending_requests:
+                print("Requisições pendentes (aguardando GRANTs):")
+                for resource, data in self.pending_requests.items():
+                    replies_count = len(data["replies_received"])
+                    needed = len(self.all_processes) - 1
+                    print(f"  {resource}: {replies_count}/{needed} GRANTs recebidos")
+            else:
+                print("Nenhuma requisição pendente")
+        
+        with self.queue_lock:
+            if self.request_queue:
+                print(f"Fila de requisições recebidas ({len(self.request_queue)} itens):")
+                for i, req in enumerate(self.request_queue):
+                    print(f"  {i+1}. {req.sender} -> '{req.resource_name}' (ts: {req.logical_time})")
+            else:
+                print("Fila de requisições recebidas vazia")
+        
+        print("=" * 40)
 
     def _multicast_message(self, message: Message):
         """
@@ -331,21 +393,16 @@ class Process:
         Process a received message, either REQUEST or REPLY for Ricart-Agrawala algorithm.
         """
         if message.msg_type == MessageType.REQUEST:
-            # Update logical clock: Cj = max{Cj, ts(m)} + 1
             self.update_clock_on_receive(message.logical_time)
             
             print(f"[{self.proc_id}] Received REQUEST from {message.sender} for resource '{message.resource_name}' (ts:{message.logical_time})")
             
-            # Process the resource request using the 3-case decision logic
             self.process_request(message)
             
         elif message.msg_type == MessageType.REPLY:
-            # Update logical clock: Cj = max{Cj, ts(m)} + 1  
             self.update_clock_on_receive(message.logical_time)
             
             print(f"[{self.proc_id}] Received REPLY from {message.sender} (ts:{message.logical_time})")
-            
-            # Process the reply (OK message) 
             self.process_reply(message)
             
         else:
