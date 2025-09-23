@@ -6,7 +6,7 @@ from process import Process
 HOST = "localhost"
 PORTS = [5000, 5001, 5002]
 PROC_NAMES = {5000: "processo1", 5001: "processo2", 5002: "processo3"}
-RESOURCES = [str(i) for i in range(1, 4)]  # Recursos como strings
+RESOURCES = [str(i) for i in range(1, 2)]  # Recursos como strings
 print("Recursos disponíveis:", RESOURCES)
 
 
@@ -56,7 +56,6 @@ def main():
         print("  queue               - Mostra apenas a fila de pedidos recebidos")
         print("  clock               - Mostra o clock lógico atual")
         print("  pass                - Incrementa o relógio em um ciclo")
-        print("  help                - Mostra esta ajuda")
         print("  quit                - Para o processo")
         print(f"\nRecursos disponíveis: {', '.join(RESOURCES)}")
         print("="*50)
@@ -73,17 +72,6 @@ def main():
                 if cmd == "quit" or cmd == "exit":
                     print("Encerrando processo...")
                     break
-                    
-                elif cmd == "help":
-                    print("\nComandos disponíveis:")
-                    print("  request <resource>  - Solicita acesso exclusivo ao recurso")
-                    print("  release <resource>  - Libera o recurso atual")
-                    print("  status              - Mostra status completo do sistema")
-                    print("  queue               - Mostra fila de requisições pendentes")
-                    print("  clock               - Mostra valor do clock lógico")
-                    print("  pass                - Avança o clock sem fazer nada")
-                    print("  quit/exit           - Encerra o processo")
-                    print(f"\nRecursos: {', '.join(RESOURCES)}")
                     
                 elif cmd == "status":
                     proc.show_status()
